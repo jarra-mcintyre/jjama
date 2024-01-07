@@ -1,6 +1,9 @@
 package me.jmcintyre;
 
 import com.carrotsearch.hppc.sorting.IndirectSort;
+import jdk.incubator.vector.FloatVector;
+import jdk.incubator.vector.VectorOperators;
+import jdk.incubator.vector.VectorSpecies;
 
 import java.io.IOException;
 import java.nio.ByteOrder;
@@ -122,23 +125,34 @@ public class Jjama {
             this.valueCache = IntStream.range(0,config.nLayers).mapToObj(_ -> new float[config.seqLen][]).toArray(float[][][]::new);
         }
 
+        private static final VectorSpecies<Float> SPECIES = FloatVector.SPECIES_PREFERRED;
+
+        static float dot(float[] x, float[] y, int xOffset, int yOffset, int size) {
+            final int upperBound = SPECIES.loopBound(size);
+            int j = 0;
+            var acc = FloatVector.zero(SPECIES);
+            for (; j < upperBound; j += SPECIES.length()) {
+                var a = FloatVector.fromArray(SPECIES, x, xOffset + j);
+                var b = FloatVector.fromArray(SPECIES, y, yOffset + j);
+                acc = a.fma(b, acc);
+            }
+            float dot = acc.reduceLanes(VectorOperators.ADD);
+            for (; j < size; j++) {
+                dot += x[j] * y[j];
+            }
+            return dot;
+        }
+
+
         static void mmul(float[] output, float[] v, float[] m, int sharedDim, int resultDim) {
             for (int i = 0; i < resultDim; i++) {
-                float dot = 0;
-                for (int j = 0; j < sharedDim; j++) {
-                    dot += m[i * sharedDim + j] * v[j];
-                }
-                output[i] = dot;
+                output[i] = dot(m, v, i *sharedDim, 0, sharedDim);
             }
         }
 
         static void addMMulInto(float[] target, float[] v, float[] m, int sharedDim, int resultDim) {
             for (int i = 0; i < resultDim; i++) {
-                float dot = 0;
-                for (int j = 0; j < sharedDim; j++) {
-                    dot += m[i * sharedDim + j] * v[j];
-                }
-                target[i] += dot;
+                target[i] += dot(m, v, i*sharedDim, 0, sharedDim);
             }
         }
 
@@ -222,11 +236,7 @@ public class Jjama {
                     float sumScore = 0, expBase = Float.NEGATIVE_INFINITY;
                     for (int t = 0; t <= pos; t++) {
                         float[] k = keyCache[l][t], v = valueCache[l][t];
-                        float score = 0.0f;
-                        for (int i = 0; i < config.headSize(); i++) {
-                            score += q[headOffset + i] * k[kvHeadOffset + i];
-                        }
-                        score /= sqrtHeadSize;
+                        float score = dot(q, k, headOffset, kvHeadOffset, config.headSize()) / sqrtHeadSize;
 
                         float stepExpBase = Math.max(score, expBase);
                         float wu = (float) Math.exp(expBase - stepExpBase), wv = (float)Math.exp(score - stepExpBase);
@@ -339,7 +349,7 @@ public class Jjama {
                 tokensProcessed += 1;
             }
 
-            if (tokenizer.isEndOfSequence(output)) {
+            if (tokenizer.isEndOfSequence(output) && pos > 0) {
                 break;
             } else {
                 System.out.print(tokenizer.decodeToken(output));
@@ -356,7 +366,7 @@ public class Jjama {
         var tokenizerPath = Path.of("tokenizer.bin");
         var model = readModel(modelPath);
         var tokenizer = Tokenizer.loadBin(tokenizerPath, model.config.vocabSize());
-        var sampler = new Sampler(model.config.vocabSize(), 0.9f, 1337);
-        generate(model, tokenizer, sampler, null);
+        var sampler = new Sampler(model.config.vocabSize(), 0.9f, (new Random()).nextInt());
+        generate(model, tokenizer, sampler, "Hello world");
     }
 }

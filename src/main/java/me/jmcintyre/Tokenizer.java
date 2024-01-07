@@ -126,8 +126,9 @@ final class Tokenizer {
         return tokens;
     }
 
+
     public boolean isEndOfSequence(int id) {
-        return id == END_OF_SEQUENCE_ID;
+        return id == END_OF_SEQUENCE_ID || id == BEGINNING_OF_SEQUENCE_ID;
     }
 
     public String decodeToken(int id) {
