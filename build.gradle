@@ -1,0 +1,53 @@
+plugins {
+    id 'java'
+    id 'application'
+    id 'me.champeau.jmh' version "0.7.2"
+}
+
+group = 'jmc'
+version = '1.0-SNAPSHOT'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'com.carrotsearch:hppc:0.9.1'
+    testImplementation platform('org.junit:junit-bom:5.9.1')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.compilerArgs += "--enable-preview"
+}
+
+var ENABLE_VECTOR_INCUBATOR = ["--enable-preview", "--add-modules", "jdk.incubator.vector"]
+
+tasks.withType(Test).configureEach {
+    jvmArgs += ENABLE_VECTOR_INCUBATOR
+}
+
+tasks.withType(JavaExec).configureEach {
+    jvmArgs += ENABLE_VECTOR_INCUBATOR
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+jmh {
+    jvmArgsAppend = ENABLE_VECTOR_INCUBATOR //+ ["-XX:+UnlockDiagnosticVMOptions", "-XX:CompileCommand=print,*.uncheckedMMulForward"]
+    //profilers = ["perfasm"]
+    profilers = ["perfnorm", "perfasm"]
+    fork = 1
+}
+
+application {
+    mainClass = 'me.jmcintyre.Jjama'
+}
