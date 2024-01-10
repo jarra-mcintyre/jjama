@@ -1,43 +1,101 @@
 package me.jmcintyre;
 
-import com.carrotsearch.hppc.sorting.IndirectSort;
-
 import java.util.Random;
-import java.util.stream.IntStream;
 
 class Sampler {
-    Random random;
-    float topPCutoff;
+    final Random random;
+    final float topPCutoff;
+    final int vocabSize;
 
-    int[] indices;
+    final int[] indices;
+    final int[] sortedIndices;
 
     public Sampler(int vocabSize, float topPCutoff, int seed) {
         this.random = new Random(seed);
         this.topPCutoff = topPCutoff;
-        this.indices = IntStream.range(0, vocabSize).toArray();
+        this.vocabSize = vocabSize;
+        this.indices = new int[vocabSize];
+        this.sortedIndices = new int[vocabSize];
+    }
+
+    private static void argSort(float[] values, int[] source, int[] destination, int offset, int length) {
+        assert source != destination;
+        System.arraycopy(source, offset, destination, offset, length);
+        mergeArgSort(values, source, destination, offset, offset + length);
+    }
+
+    private static void mergeArgSort(float[] values, int[] source, int[] destination, int fromIndex, int toIndex) {
+        if (toIndex - fromIndex <= 32) {
+            insertionArgSort(values, destination, fromIndex, toIndex);
+        } else {
+            int midIndex = fromIndex + toIndex >>> 1;
+            mergeArgSort(values, destination, source, fromIndex, midIndex);
+            mergeArgSort(values, destination, source, midIndex, toIndex);
+
+            if (values[source[midIndex - 1]] > values[source[midIndex]]) {
+                // subsets are already sorted
+                System.arraycopy(source, fromIndex, destination, fromIndex, toIndex - fromIndex);
+            } else {
+                // merge sorted subsets into destination
+                int lowerIndex = fromIndex, upperIndex = midIndex;
+                for (int i = fromIndex; i < toIndex; i++) {
+                    if (upperIndex != toIndex && (lowerIndex >= midIndex || values[source[lowerIndex]] < values[source[upperIndex]])) {
+                        destination[i] = source[upperIndex++];
+                    } else {
+                        destination[i] = source[lowerIndex++];
+                    }
+                }
+            }
+        }
+    }
+
+    private static void insertionArgSort(float[] values, int[] indices, int fromIndex, int toIndex) {
+        for (int i = fromIndex + 1; i < toIndex; i++) {
+            int v =  indices[i], j = i;
+            while (j > fromIndex) {
+                int t = indices[j - 1];
+                if (values[v] > values[t]) {
+                    indices[j--] = t;
+                } else {
+                    break;
+                }
+            }
+            indices[j] = v;
+        }
     }
 
     int sampleTopP(float[] probabilities, float sampleProbability) {
-        IndirectSort.mergesort(indices, (i1, i2) -> -Float.compare(probabilities[i1], probabilities[i2]));
-        //return indices[0];
+        float minimumProbability = (1 - topPCutoff) / (vocabSize - 1);
+        int candidates = 0;
+        for (int i = 0; i < probabilities.length; i++) {
+            if (probabilities[i] >= minimumProbability) {
+                indices[candidates++] = i;
+            }
+        }
+
+        // Quick sort candidates
+        argSort(probabilities, indices, sortedIndices, 0, candidates);
+
         // Find the top N candidates. They will have a cumulative 'probability' gte topP
         float topNProbability = 0.f;
         int cutoffIndex = 0;
-        for (; cutoffIndex < indices.length; cutoffIndex++) {
-            topNProbability += probabilities[indices[cutoffIndex]];
+        for (; cutoffIndex < candidates; cutoffIndex++) {
+            topNProbability += probabilities[sortedIndices[cutoffIndex]];
             if (topNProbability > topPCutoff) {
                 cutoffIndex += 1;
                 break;
             }
         }
+
         float sampleCutoff = topNProbability * sampleProbability, sampleCdf = 0;
         for (int i = 0; i < cutoffIndex; i++) {
-            sampleCdf += probabilities[indices[i]];
+            sampleCdf += probabilities[sortedIndices[i]];
             if (sampleCdf >= sampleCutoff) {
-                return indices[i];
+                return sortedIndices[i];
             }
         }
-        return indices[cutoffIndex - 1];
+
+        return sortedIndices[cutoffIndex - 1];
     }
 
     int sample(float[] probabilities) {
